@@ -6,6 +6,7 @@ Handles usage event tracking and analytics computations
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import TYPE_CHECKING, TypedDict
 
 from celery import shared_task
@@ -218,3 +219,32 @@ def send_access_request_new_request_email(request_id: int) -> None:
 
     AccessRequestNotificationService().send_publisher_new_request_email(request_id)
     logger.info(f"Task completed [task=send_access_request_new_request_email, request_id={request_id}]")
+
+
+@shared_task
+def cleanup_abandoned_content_drafts_task(older_than_hours: int = 24) -> dict[str, int]:
+    """
+    Periodic task to delete abandoned per-ayah content draft versions.
+
+    A draft is abandoned when it has not been touched (``updated_at``) for
+    longer than the threshold and was never published. Active editing bumps
+    ``updated_at`` via autosave, so in-progress drafts are preserved.
+
+    Args:
+        older_than_hours: Delete drafts not updated within this many hours.
+
+    Returns:
+        Dictionary with the number of drafts deleted.
+    """
+    logger.info(
+        f"Task started [task=cleanup_abandoned_content_drafts_task, older_than_hours={older_than_hours}]"
+    )
+    from django.utils import timezone
+
+    from apps.content.models import AssetVersion, VersionStateChoice
+
+    cutoff = timezone.now() - timedelta(hours=older_than_hours)
+    stale = AssetVersion.objects.filter(state=VersionStateChoice.DRAFT, updated_at__lt=cutoff)
+    deleted, _ = stale.delete()
+    logger.info(f"Task completed [task=cleanup_abandoned_content_drafts_task, deleted={deleted}]")
+    return {"deleted": deleted}

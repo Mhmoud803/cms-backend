@@ -7,7 +7,14 @@ from ninja import Field, FilterLookup, FilterSchema, Query, Schema
 from ninja.pagination import paginate
 from pydantic import AwareDatetime
 
-from apps.content.models import Asset, CategoryChoice, LicenseChoice, Riwayah, StatusChoice
+from apps.content.models import (
+    Asset,
+    CategoryChoice,
+    LicenseChoice,
+    Riwayah,
+    StatusChoice,
+    VersionStateChoice,
+)
 from apps.content.services.recitation import RecitationService
 from apps.core.ninja_utils.errors import ItqanError, NinjaErrorResponse
 from apps.core.ninja_utils.ordering_base import ordering
@@ -108,7 +115,7 @@ class RecitationDetailOut(Schema):
 
     @staticmethod
     def resolve_ayah_timings_url(obj: Asset) -> str | None:
-        if version := obj.versions.first():
+        if version := obj.versions.filter(state=VersionStateChoice.PUBLISHED).first():
             return version.file_url.url if version.file_url else None
         return None
 

@@ -111,6 +111,9 @@ msgstr "مسودة"
 msgid "Ready"
 msgstr "جاهز"
 
+msgid "Published"
+msgstr "منشور"
+
 msgid "Twassut"
 msgstr "توسط"
 
