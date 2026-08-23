@@ -234,6 +234,31 @@ def slice_recitation_track_task(self, track_id: int) -> dict:
     soft_time_limit=300,
     time_limit=360,
 )
+def compute_similar_recommendations_task() -> dict:
+    """
+    Nightly recompute of "similar content" recommendation scores.
+
+    Delegates to RecommendationsService.compute_similar_recommendations, which scores
+    every READY, publicly-visible asset against others sharing reciter/riwayah/qiraah/
+    category and writes the top matches per asset to Redis as sorted sets. See
+    apps.content.services.recommendations for the scoring design.
+
+    Runs nightly at 2:00 via Celery beat (config/celery.py). Catalog-sized workloads
+    are expected to finish well within the 5-minute soft limit; the limits mirror
+    sync_audio_usage_task's 20%-headroom convention (300s soft / 360s hard).
+    """
+    logger.info("Task started [task=compute_similar_recommendations_task]")
+    from apps.content.services.recommendations import compute_similar_recommendations
+
+    result = compute_similar_recommendations()
+    logger.info(f"Task completed [task=compute_similar_recommendations_task, result={result}]")
+    return result
+
+
+@shared_task(
+    soft_time_limit=300,
+    time_limit=360,
+)
 def slice_all_recitation_tracks_task() -> dict:
     """
     Enqueue slice_recitation_track_task for every existing recitation track.
