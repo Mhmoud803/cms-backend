@@ -6,6 +6,11 @@ Shared by translations and tafsirs; both edit the same
 
 from __future__ import annotations
 
+import csv
+import io
+import re
+
+from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import QuerySet
 
@@ -23,15 +28,46 @@ class AssetContentRepository:
         """Map (sura_id, number_in_sura) -> ayah pk for resolving parsed rows."""
         return {
             (sura_id, number): ayah_id
-            for ayah_id, sura_id, number in Ayah.objects.values_list(
-                "id", "sura_id", "number_in_sura"
-            )
+            for ayah_id, sura_id, number in Ayah.objects.values_list("id", "sura_id", "number_in_sura")
         }
 
+    def unique_version_name(self, asset: Asset, base_name: str) -> str:
+        """Return a version name unique within the asset (versions are distinct).
+
+        Naming is "smart": if the base name ends with a number, that number is
+        incremented (``v1`` → ``v2`` → ``v3``, ``الإصدار 1`` → ``الإصدار 2``),
+        continuing until the name is free. If there is no trailing number, a
+        numeric suffix is appended (``Draft`` → ``Draft 2``). Stays within the
+        model's ``name`` max_length.
+        """
+        max_length = self.asset_version_model._meta.get_field("name").max_length or 255
+        existing = set(self.asset_version_model.objects.filter(asset=asset).values_list("name", flat=True))
+
+        # The last run of digits in the name (e.g. the "1" in "v1", the "2" in "v1 (2)").
+        match = re.search(r"\d+(?=\D*$)", base_name)
+        if match:
+            start, end = match.span()
+            prefix, suffix = base_name[:start], base_name[end:]
+            number = int(match.group())
+            candidate = base_name
+            while candidate in existing:
+                number += 1
+                candidate = f"{prefix}{number}{suffix}"
+            return candidate[:max_length]
+
+        # No number to bump — append " 2", " 3", …
+        if base_name not in existing:
+            return base_name[:max_length]
+        counter = 2
+        while True:
+            tail = f" {counter}"
+            candidate = f"{base_name[: max_length - len(tail)]}{tail}"
+            if candidate not in existing:
+                return candidate
+            counter += 1
+
     def get_draft(self, asset: Asset) -> AssetVersion | None:
-        return self.asset_version_model.objects.filter(
-            asset=asset, state=VersionStateChoice.DRAFT
-        ).first()
+        return self.asset_version_model.objects.filter(asset=asset, state=VersionStateChoice.DRAFT).first()
 
     def get_version(self, asset: Asset, version_id: int) -> AssetVersion | None:
         return self.asset_version_model.objects.filter(asset=asset, id=version_id).first()
@@ -73,9 +109,7 @@ class AssetContentRepository:
         return draft
 
     @transaction.atomic
-    def replace_entries_from_parsed(
-        self, version: AssetVersion, parsed: list[ParsedEntry]
-    ) -> int:
+    def replace_entries_from_parsed(self, version: AssetVersion, parsed: list[ParsedEntry]) -> int:
         """Replace a version's entries with parsed per-ayah rows. Returns count."""
         ayah_index = self._ayah_id_by_sura_aya()
         version.entries.all().delete()
@@ -98,15 +132,10 @@ class AssetContentRepository:
         return len(rows)
 
     @transaction.atomic
-    def upsert_entries(
-        self, version: AssetVersion, rows: list[dict[str, object]]
-    ) -> list[AssetVersionEntry]:
+    def upsert_entries(self, version: AssetVersion, rows: list[dict[str, object]]) -> list[AssetVersionEntry]:
         """Create or update draft entries keyed by ayah id. Returns changed rows."""
         ayah_ids = [int(row["ayah_id"]) for row in rows]
-        existing = {
-            entry.ayah_id: entry
-            for entry in version.entries.filter(ayah_id__in=ayah_ids)
-        }
+        existing = {entry.ayah_id: entry for entry in version.entries.filter(ayah_id__in=ayah_ids)}
         to_create: list[AssetVersionEntry] = []
         to_update: list[AssetVersionEntry] = []
         changed: list[AssetVersionEntry] = []
@@ -134,19 +163,55 @@ class AssetContentRepository:
         if to_create:
             AssetVersionEntry.objects.bulk_create(to_create, batch_size=1000)
         if to_update:
-            AssetVersionEntry.objects.bulk_update(
-                to_update, ["text", "footnotes"], batch_size=1000
-            )
+            AssetVersionEntry.objects.bulk_update(to_update, ["text", "footnotes"], batch_size=1000)
         return changed
+
+    def entries_to_csv_bytes(self, version: AssetVersion) -> bytes:
+        """Serialize a version's per-ayah entries to CSV (sura,aya,text,footnotes)."""
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(["sura", "aya", "text", "footnotes"])
+        for entry in version.entries.select_related("ayah").order_by("order", "ayah_id").iterator():
+            writer.writerow([entry.ayah.sura_id, entry.ayah.number_in_sura, entry.text, entry.footnotes])
+        return buffer.getvalue().encode("utf-8")
 
     @transaction.atomic
     def publish_draft(self, draft: AssetVersion) -> AssetVersion:
-        """Flip a draft to published so newest-wins makes it the latest version."""
+        """Flip a draft to published so newest-wins makes it the latest version.
+
+        Also materializes a downloadable CSV file from the per-ayah entries (when
+        the version has no uploaded file), so consumer download paths — the
+        gallery, developers/tenant APIs — work for grid-edited versions.
+        """
         draft.state = VersionStateChoice.PUBLISHED
-        draft.save(update_fields=["state", "updated_at"])
+        update_fields = ["state", "updated_at"]
+        if not draft.file_url and draft.entries.exists():
+            content = self.entries_to_csv_bytes(draft)
+            filename = f"{draft.asset.slug}-{draft.name}.csv".replace(" ", "_")
+            draft.file_url.save(filename, ContentFile(content), save=False)
+            draft.size_bytes = len(content)
+            update_fields += ["file_url", "size_bytes"]
+        draft.save(update_fields=update_fields)
+
         draft.asset.file_size = draft.human_readable_size
-        draft.asset.save(update_fields=["file_size", "updated_at"])
+        asset_fields = ["file_size", "updated_at"]
+        if not draft.asset.format:
+            draft.asset.format = "csv"
+            asset_fields.append("format")
+        draft.asset.save(update_fields=asset_fields)
         return draft
+
+    def backfill_file_from_entries(self, version: AssetVersion) -> bool:
+        """Generate a CSV file for a published version that has entries but no
+        file. Returns True if a file was written."""
+        if version.file_url or not version.entries.exists():
+            return False
+        content = self.entries_to_csv_bytes(version)
+        filename = f"{version.asset.slug}-{version.name}.csv".replace(" ", "_")
+        version.file_url.save(filename, ContentFile(content), save=False)
+        version.size_bytes = len(content)
+        version.save(update_fields=["file_url", "size_bytes", "updated_at"])
+        return True
 
     def delete_version(self, version: AssetVersion) -> None:
         version.delete()

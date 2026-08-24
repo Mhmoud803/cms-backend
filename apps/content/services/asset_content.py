@@ -14,19 +14,9 @@ import logging
 from django.db.models import Q
 from django.utils.translation import gettext as _
 
-from apps.content.models import (
-    Asset,
-    AssetVersion,
-    AssetVersionEntry,
-    CategoryChoice,
-    StatusChoice,
-    VersionStateChoice,
-)
+from apps.content.models import Asset, AssetVersion, AssetVersionEntry, CategoryChoice, StatusChoice, VersionStateChoice
 from apps.content.repositories.asset_content import AssetContentRepository
-from apps.content.services.asset_content_import import (
-    AssetContentParseError,
-    parse_content_file,
-)
+from apps.content.services.asset_content_import import AssetContentParseError, parse_content_file
 from apps.content.tasks import notify_asset_version_created
 from apps.core.ninja_utils.errors import ItqanError
 
@@ -38,33 +28,39 @@ _NOT_FOUND_ERROR = {
 }
 
 
-def import_uploaded_file_into_entries(version: AssetVersion, file) -> None:
+def import_uploaded_file_into_entries(version: AssetVersion) -> None:
     """Best-effort: parse an uploaded version file into per-ayah entries.
 
     Called from the translation/tafsir version create/update flow so that any
     uploaded content file also populates ``AssetVersionEntry`` rows (edits then
     happen on rows, never on the file). A file that cannot be parsed is logged
     and skipped so it never breaks the existing upload path.
+
+    Reads from the *saved* ``version.file_url`` rather than the passed-in upload
+    object: by the time this runs the repository has already written the upload
+    to storage, which consumes the upload stream (a large ``TemporaryUploadedFile``
+    ends up at EOF / closed), so re-reading the upload directly would yield empty
+    bytes. Reading the persisted file is reliable for uploads of any size.
     """
-    if not file:
+    saved = getattr(version, "file_url", None)
+    if not saved:
         return
     try:
-        file.seek(0)
-        raw = file.read()
+        saved.open("rb")
+        try:
+            raw = saved.read()
+        finally:
+            saved.close()
     except Exception:
-        logger.warning(f"Could not read uploaded file for entries [version_id={version.pk}]")
+        logger.warning(f"Could not read saved version file for entries [version_id={version.pk}]")
         return
     try:
         parsed = parse_content_file(raw)
     except AssetContentParseError as exc:
-        logger.info(
-            f"Uploaded file not parsed into entries [version_id={version.pk}, reason={exc}]"
-        )
+        logger.info(f"Uploaded file not parsed into entries [version_id={version.pk}, reason={exc}]")
         return
     AssetContentRepository().replace_entries_from_parsed(version, parsed)
-    logger.info(
-        f"Uploaded file imported into entries [version_id={version.pk}, entries={len(parsed)}]"
-    )
+    logger.info(f"Uploaded file imported into entries [version_id={version.pk}, entries={len(parsed)}]")
 
 
 class AssetContentService:
@@ -73,9 +69,7 @@ class AssetContentService:
     def __init__(self, repo: AssetContentRepository | None = None) -> None:
         self.repo = repo or AssetContentRepository()
 
-    def _get_asset_or_404(
-        self, slug: str, category: CategoryChoice, publisher_q: Q | None = None
-    ) -> Asset:
+    def _get_asset_or_404(self, slug: str, category: CategoryChoice, publisher_q: Q | None = None) -> Asset:
         qs = Asset.objects.all()
         if publisher_q is not None:
             qs = qs.filter(publisher_q)
@@ -84,15 +78,11 @@ class AssetContentService:
         except Asset.DoesNotExist as exc:
             raise ItqanError(
                 error_name=_NOT_FOUND_ERROR[category],
-                message=_("{category} with slug {slug} not found.").format(
-                    category=category.label, slug=slug
-                ),
+                message=_("{category} with slug {slug} not found.").format(category=category.label, slug=slug),
                 status_code=404,
             ) from exc
 
-    def _get_editable_draft_or_400(
-        self, asset: Asset, version_id: int
-    ) -> AssetVersion:
+    def _get_editable_draft_or_400(self, asset: Asset, version_id: int) -> AssetVersion:
         version = self.repo.get_version(asset, version_id)
         if version is None:
             raise ItqanError(
@@ -116,15 +106,29 @@ class AssetContentService:
         created_by_id: int | None,
         publisher_q: Q | None = None,
     ) -> AssetVersion:
-        """Return the asset's shared draft, creating it (seeded from the latest
-        published version) if none exists."""
+        """Return the asset's shared draft, seeding it from the latest published
+        version. Creates the draft if none exists; if an existing draft predates
+        the latest published version (e.g. a new version was uploaded after the
+        draft was started), the stale draft is rebuilt from that newer version so
+        the editor always reflects the current content."""
         asset = self._get_asset_or_404(slug, category, publisher_q=publisher_q)
+        source = asset.get_latest_version()
         existing = self.repo.get_draft(asset)
         if existing is not None:
-            return existing
-
-        source = asset.get_latest_version()
-        name = source.name if source else _("Draft")
+            is_stale = source is not None and source.created_at > existing.created_at
+            if not is_stale:
+                return existing
+            # A newer version exists than this draft — discard the stale draft and
+            # rebuild it below from the current latest version.
+            logger.info(
+                f"Rebuilding stale draft [draft_id={existing.pk}, asset_id={asset.pk}, "
+                f"newer_version_id={source.pk}]"
+            )
+            self.repo.delete_version(existing)
+        # Versions carry distinct names, so a draft must not reuse the source
+        # version's name verbatim (it would collide with it on save).
+        base_name = source.name if source else _("Draft")
+        name = self.repo.unique_version_name(asset, base_name)
         summary = source.summary if source else ""
         draft = self.repo.create_draft_seeded_from(
             asset,
@@ -147,6 +151,17 @@ class AssetContentService:
         publisher_q: Q | None = None,
     ):
         """Return a version's per-ayah entries (any state; used by the editor)."""
+        version = self.get_version_or_404(slug, category, version_id, publisher_q=publisher_q)
+        return self.repo.get_entries(version)
+
+    def get_version_or_404(
+        self,
+        slug: str,
+        category: CategoryChoice,
+        version_id: int,
+        publisher_q: Q | None = None,
+    ) -> AssetVersion:
+        """Return a version belonging to the asset, or raise 404."""
         asset = self._get_asset_or_404(slug, category, publisher_q=publisher_q)
         version = self.repo.get_version(asset, version_id)
         if version is None:
@@ -155,7 +170,7 @@ class AssetContentService:
                 message=_("Version with id {id} not found.").format(id=version_id),
                 status_code=404,
             )
-        return self.repo.get_entries(version)
+        return version
 
     def upsert_entries(
         self,
@@ -169,14 +184,10 @@ class AssetContentService:
         asset = self._get_asset_or_404(slug, category, publisher_q=publisher_q)
         draft = self._get_editable_draft_or_400(asset, version_id)
         changed = self.repo.upsert_entries(draft, rows)
-        logger.info(
-            f"Draft entries upserted [version_id={draft.pk}, count={len(changed)}]"
-        )
+        logger.info(f"Draft entries upserted [version_id={draft.pk}, count={len(changed)}]")
         return changed
 
-    def import_file_into_version(
-        self, version: AssetVersion, raw: bytes
-    ) -> int:
+    def import_file_into_version(self, version: AssetVersion, raw: bytes) -> int:
         """Parse an uploaded content file and replace the version's entries.
 
         Returns the number of entries created. Raises ``ItqanError`` (400) if the
@@ -187,15 +198,11 @@ class AssetContentService:
         except AssetContentParseError as exc:
             raise ItqanError(
                 error_name="content_file_unparseable",
-                message=_("Could not parse the uploaded content file: {reason}").format(
-                    reason=str(exc)
-                ),
+                message=_("Could not parse the uploaded content file: {reason}").format(reason=str(exc)),
                 status_code=400,
             ) from exc
         count = self.repo.replace_entries_from_parsed(version, parsed)
-        logger.info(
-            f"Imported content file into version [version_id={version.pk}, entries={count}]"
-        )
+        logger.info(f"Imported content file into version [version_id={version.pk}, entries={count}]")
         return count
 
     def publish_draft(
@@ -216,9 +223,7 @@ class AssetContentService:
         if summary is not None:
             draft.summary = summary
         published = self.repo.publish_draft(draft)
-        logger.info(
-            f"Draft published [version_id={published.pk}, asset_id={asset.pk}]"
-        )
+        logger.info(f"Draft published [version_id={published.pk}, asset_id={asset.pk}]")
         notify_asset_version_created.delay(published.pk)
         return published
 

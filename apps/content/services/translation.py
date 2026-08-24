@@ -245,7 +245,8 @@ class TranslationService:
             summary=summary,
             file=file,
         )
-        import_uploaded_file_into_entries(version, file)
+        if file:
+            import_uploaded_file_into_entries(version)
         logger.info(
             f"Translation version created [version_id={version.pk}, asset_id={asset.pk}, slug={translation_slug}]"
         )
@@ -265,7 +266,7 @@ class TranslationService:
         version = self._get_translation_version_or_404(translation_slug, version_id, publisher_q=publisher_q)
         updated = self.repo.update_translation_version(version, fields=fields)
         if fields.get("file_url"):
-            import_uploaded_file_into_entries(updated, fields["file_url"])
+            import_uploaded_file_into_entries(updated)
         logger.info(f"Translation version updated [version_id={version_id}, asset_slug={translation_slug}]")
         return updated
 

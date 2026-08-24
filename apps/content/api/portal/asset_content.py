@@ -4,8 +4,11 @@ One router serves both categories, keyed by a ``{category}`` path segment, so
 the draft / entries / publish / discard flow lives in a single place.
 """
 
+import csv
+import io
 from typing import Literal
 
+from django.http import HttpResponse, HttpResponseRedirect
 from ninja import Schema
 from ninja.pagination import paginate
 from pydantic import AwareDatetime, Field
@@ -165,9 +168,7 @@ def patch_entries(
     resolved = _resolve(category, request, write=True)
     service = AssetContentService()
     rows = [row.model_dump() for row in data.rows]
-    return service.upsert_entries(
-        slug, resolved, version_id, rows, publisher_q=request.publisher_q()
-    )
+    return service.upsert_entries(slug, resolved, version_id, rows, publisher_q=request.publisher_q())
 
 
 @router.post(
@@ -181,9 +182,7 @@ def patch_entries(
         | NinjaErrorResponse[Literal["unsupported_content_category"]],
     },
 )
-def publish_draft(
-    request: Request, category: str, slug: str, version_id: int, data: PublishIn
-) -> AssetVersion:
+def publish_draft(request: Request, category: str, slug: str, version_id: int, data: PublishIn) -> AssetVersion:
     resolved = _resolve(category, request, write=True)
     service = AssetContentService()
     return service.publish_draft(
@@ -207,10 +206,48 @@ def publish_draft(
         | NinjaErrorResponse[Literal["unsupported_content_category"]],
     },
 )
-def discard_draft(
-    request: Request, category: str, slug: str, version_id: int
-) -> tuple[int, None]:
+def discard_draft(request: Request, category: str, slug: str, version_id: int) -> tuple[int, None]:
     resolved = _resolve(category, request, write=True)
     service = AssetContentService()
     service.discard_draft(slug, resolved, version_id, publisher_q=request.publisher_q())
     return 204, None
+
+
+@router.get(
+    "content/{category}/{slug}/versions/{version_id}/export/",
+    response={
+        404: NinjaErrorResponse[Literal["translation_not_found"]]
+        | NinjaErrorResponse[Literal["tafsir_not_found"]]
+        | NinjaErrorResponse[Literal["version_not_found"]]
+        | NinjaErrorResponse[Literal["unsupported_content_category"]],
+    },
+)
+def export_version(request: Request, category: str, slug: str, version_id: int):
+    """Download a version's content as CSV (per-ayah entries).
+
+    Falls back to the version's uploaded file when it has no per-ayah entries.
+    """
+    resolved = _resolve(category, request, write=False)
+    service = AssetContentService()
+    version = service.get_version_or_404(slug, resolved, version_id, publisher_q=request.publisher_q())
+
+    entries = version.entries.select_related("ayah").order_by("order", "ayah_id")
+    if not entries.exists():
+        if version.file_url:
+            return HttpResponseRedirect(version.file_url.url)
+        raise ItqanError(
+            error_name="version_not_found",
+            message="This version has no downloadable content.",
+            status_code=404,
+        )
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["sura", "aya", "text", "footnotes"])
+    for entry in entries.iterator():
+        writer.writerow([entry.ayah.sura_id, entry.ayah.number_in_sura, entry.text, entry.footnotes])
+
+    filename = f"{slug}-{version.name}.csv".replace(" ", "_")
+    response = HttpResponse(buffer.getvalue(), content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
