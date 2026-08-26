@@ -16,12 +16,16 @@ _GET_REDIS = "apps.content.services.recommendations.get_recommendations_redis"
 
 
 def _test_redis_client() -> redis_lib.Redis:
-    from django_redis import get_redis_connection
+    # Dev/CI settings force CACHES to LocMemCache (see config/settings/development.py),
+    # so we can't route through django-redis here -- resolve the host the same way
+    # base.py resolves REDIS_URL, which is "localhost" natively and "redis" in CI's
+    # docker-compose network.
+    from urllib.parse import urlparse
 
-    kwargs = dict(get_redis_connection("default").connection_pool.connection_kwargs)
-    kwargs["db"] = 15
-    kwargs["decode_responses"] = True
-    return redis_lib.Redis(**kwargs)
+    from decouple import config
+
+    parsed = urlparse(config("REDIS_URL", default="redis://localhost:6379/1"))
+    return redis_lib.Redis(host=parsed.hostname, port=parsed.port, db=15, decode_responses=True)
 
 
 class SimilarRecommendationsEndpointTest(BaseTestCase):
