@@ -268,7 +268,7 @@ class PublishDraftTest(AssetContentBaseTest):
         # Arrange
         self.authenticate_user(self.user)
         self.give_permission(self.user, PermissionChoice.PORTAL_UPDATE_TRANSLATION)
-        draft = baker.make(AssetVersion, asset=self.translation, state=VersionStateChoice.DRAFT)
+        draft = baker.make(AssetVersion, asset=self.translation, state=VersionStateChoice.DRAFT, content_edited=True)
         baker.make(AssetVersionEntry, version=draft, ayah=self.ayahs[0], text="text")
 
         # Act
@@ -283,6 +283,44 @@ class PublishDraftTest(AssetContentBaseTest):
         draft.refresh_from_db()
         self.assertEqual(VersionStateChoice.PUBLISHED, draft.state)
         self.assertEqual(draft.id, self.translation.get_latest_version().id)
+        # publish name is persisted (not just held in memory)
+        self.assertEqual("V2", draft.name)
+
+    def test_publish_draft_where_no_changes_should_return_400(self):
+        # Arrange — a seeded, unedited draft (content_edited stays False)
+        self.authenticate_user(self.user)
+        self.give_permission(self.user, PermissionChoice.PORTAL_UPDATE_TRANSLATION)
+        draft = baker.make(AssetVersion, asset=self.translation, state=VersionStateChoice.DRAFT, content_edited=False)
+        baker.make(AssetVersionEntry, version=draft, ayah=self.ayahs[0], text="seeded")
+
+        # Act
+        response = self.client.post(
+            f"/portal/content/translations/{self.translation.slug}/versions/{draft.id}/publish/",
+            data={},
+            content_type="application/json",
+        )
+
+        # Assert
+        self.assertEqual(400, response.status_code, response.content)
+        self.assertEqual("no_changes_to_publish", response.json()["error_name"])
+
+    def test_patch_entries_should_mark_draft_as_edited(self):
+        # Arrange — a fresh, unedited draft
+        self.authenticate_user(self.user)
+        self.give_permission(self.user, PermissionChoice.PORTAL_UPDATE_TRANSLATION)
+        draft = baker.make(AssetVersion, asset=self.translation, state=VersionStateChoice.DRAFT, content_edited=False)
+
+        # Act — edit an entry
+        response = self.client.patch(
+            f"/portal/content/translations/{self.translation.slug}/versions/{draft.id}/entries/",
+            data={"rows": [{"ayah_id": 1, "text": "edited"}]},
+            content_type="application/json",
+        )
+
+        # Assert — draft is now flagged as edited (so it can be published)
+        self.assertEqual(200, response.status_code, response.content)
+        draft.refresh_from_db()
+        self.assertTrue(draft.content_edited)
 
     def test_publish_draft_should_generate_downloadable_file_from_entries(self):
         # Arrange
@@ -294,6 +332,7 @@ class PublishDraftTest(AssetContentBaseTest):
             name="v1",
             state=VersionStateChoice.DRAFT,
             file_url=None,
+            content_edited=True,
         )
         baker.make(AssetVersionEntry, version=draft, ayah=self.ayahs[0], text="au nom", footnotes="[n]")
 
@@ -476,6 +515,25 @@ class ExportVersionTest(AssetContentBaseTest):
         self.assertIn("sura,aya,text,footnotes", body)
         self.assertIn("au nom", body)
 
+    def test_export_where_version_name_is_arabic_should_encode_content_disposition(self):
+        # Arrange — a version name with non-ASCII (Arabic) characters
+        self.authenticate_user(self.user)
+        self.give_permission(self.user, PermissionChoice.PORTAL_READ_TRANSLATION)
+        version = baker.make(AssetVersion, asset=self.translation, name="الإصدار ١", state=VersionStateChoice.PUBLISHED)
+        baker.make(AssetVersionEntry, version=version, ayah=self.ayahs[0], text="نص")
+
+        # Act
+        response = self.client.get(
+            f"/portal/content/translations/{self.translation.slug}/versions/{version.id}/export/"
+        )
+
+        # Assert — header is valid latin-1 (RFC 5987 filename*), no UnicodeEncodeError
+        self.assertEqual(200, response.status_code, response.content)
+        disposition = response["Content-Disposition"]
+        self.assertIn("attachment", disposition)
+        self.assertIn("filename*=utf-8''", disposition)
+        disposition.encode("latin-1")  # would raise if non-ASCII leaked in unencoded
+
     def test_export_where_no_entries_and_no_file_should_return_404(self):
         # Arrange
         self.authenticate_user(self.user)
@@ -507,14 +565,17 @@ class ExportVersionTest(AssetContentBaseTest):
 
 class CleanupAbandonedDraftsTaskTest(AssetContentBaseTest):
     def test_cleanup_where_draft_is_stale_should_delete_it(self):
-        # Arrange
+        # Arrange — a stale draft WITH entries; the reported count must be the number
+        # of draft versions, not the cascaded entry rows.
         stale = baker.make(AssetVersion, asset=self.translation, state=VersionStateChoice.DRAFT)
+        baker.make(AssetVersionEntry, version=stale, ayah=self.ayahs[0], text="x")
+        baker.make(AssetVersionEntry, version=stale, ayah=self.ayahs[1], text="y")
         AssetVersion.objects.filter(pk=stale.pk).update(updated_at=timezone.now() - timedelta(hours=48))
 
         # Act
         result = cleanup_abandoned_content_drafts_task(older_than_hours=24)
 
-        # Assert
+        # Assert — 1 draft version deleted (not 3 = version + 2 entries)
         self.assertEqual(1, result["deleted"])
         self.assertFalse(AssetVersion.objects.filter(pk=stale.pk).exists())
 

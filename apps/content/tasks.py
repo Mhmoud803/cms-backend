@@ -277,6 +277,9 @@ def cleanup_abandoned_content_drafts_task(older_than_hours: int = 24) -> dict[st
 
     cutoff = timezone.now() - timedelta(hours=older_than_hours)
     stale = AssetVersion.objects.filter(state=VersionStateChoice.DRAFT, updated_at__lt=cutoff)
-    deleted, _ = stale.delete()
+    _, deleted_by_model = stale.delete()
+    # delete() returns the total incl. cascaded AssetVersionEntry rows; report the
+    # number of draft versions only.
+    deleted = deleted_by_model.get(AssetVersion._meta.label, 0)
     logger.info(f"Task completed [task=cleanup_abandoned_content_drafts_task, deleted={deleted}]")
     return {"deleted": deleted}

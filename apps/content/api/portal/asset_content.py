@@ -4,11 +4,10 @@ One router serves both categories, keyed by a ``{category}`` path segment, so
 the draft / entries / publish / discard flow lives in a single place.
 """
 
-import csv
-import io
 from typing import Literal
 
 from django.http import HttpResponse, HttpResponseRedirect
+from django.utils.http import content_disposition_header
 from ninja import Schema
 from ninja.pagination import paginate
 from pydantic import AwareDatetime, Field
@@ -64,11 +63,16 @@ class DraftVersionOut(Schema):
     summary: str
     state: str
     entries_count: int
+    has_changes: bool
     created_at: AwareDatetime
 
     @staticmethod
     def resolve_entries_count(obj: AssetVersion) -> int:
         return obj.entries.count()
+
+    @staticmethod
+    def resolve_has_changes(obj: AssetVersion) -> bool:
+        return obj.content_edited
 
 
 class EntryOut(Schema):
@@ -175,7 +179,7 @@ def patch_entries(
     "content/{category}/{slug}/versions/{version_id}/publish/",
     response={
         200: DraftVersionOut,
-        400: NinjaErrorResponse[Literal["version_not_editable"]],
+        400: NinjaErrorResponse[Literal["version_not_editable"]] | NinjaErrorResponse[Literal["no_changes_to_publish"]],
         404: NinjaErrorResponse[Literal["translation_not_found"]]
         | NinjaErrorResponse[Literal["tafsir_not_found"]]
         | NinjaErrorResponse[Literal["version_not_found"]]
@@ -231,8 +235,7 @@ def export_version(request: Request, category: str, slug: str, version_id: int):
     service = AssetContentService()
     version = service.get_version_or_404(slug, resolved, version_id, publisher_q=request.publisher_q())
 
-    entries = version.entries.select_related("ayah").order_by("order", "ayah_id")
-    if not entries.exists():
+    if not version.entries.exists():
         if version.file_url:
             return HttpResponseRedirect(version.file_url.url)
         raise ItqanError(
@@ -241,13 +244,9 @@ def export_version(request: Request, category: str, slug: str, version_id: int):
             status_code=404,
         )
 
-    buffer = io.StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(["sura", "aya", "text", "footnotes"])
-    for entry in entries.iterator():
-        writer.writerow([entry.ayah.sura_id, entry.ayah.number_in_sura, entry.text, entry.footnotes])
-
-    filename = f"{slug}-{version.name}.csv".replace(" ", "_")
-    response = HttpResponse(buffer.getvalue(), content_type="text/csv; charset=utf-8")
-    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    content = service.repo.entries_to_csv_bytes(version)
+    filename = f"{slug}-{version.name}.csv"
+    response = HttpResponse(content, content_type="text/csv; charset=utf-8")
+    # content_disposition_header safely handles non-ASCII (Arabic) and quoted names.
+    response["Content-Disposition"] = content_disposition_header(as_attachment=True, filename=filename)
     return response

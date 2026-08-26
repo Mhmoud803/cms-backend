@@ -316,6 +316,15 @@ class AssetVersion(DeleteFilesOnDeleteMixin, BaseModel):
         help_text="User who created this version (e.g. started the draft).",
     )
 
+    content_edited = models.BooleanField(
+        default=False,
+        help_text=(
+            "True once a draft's per-ayah entries have been edited after seeding. "
+            "Publishing an unedited draft would just duplicate the latest version, "
+            "so it is disallowed."
+        ),
+    )
+
     class Meta:
         constraints = [
             # At most one in-flight draft per asset (shared, get-or-create).

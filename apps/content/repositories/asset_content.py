@@ -164,6 +164,10 @@ class AssetContentRepository:
             AssetVersionEntry.objects.bulk_create(to_create, batch_size=1000)
         if to_update:
             AssetVersionEntry.objects.bulk_update(to_update, ["text", "footnotes"], batch_size=1000)
+        # Mark the draft as edited so an unchanged draft can't be published.
+        if changed and not version.content_edited:
+            version.content_edited = True
+            version.save(update_fields=["content_edited", "updated_at"])
         return changed
 
     def entries_to_csv_bytes(self, version: AssetVersion) -> bytes:
@@ -184,7 +188,9 @@ class AssetContentRepository:
         gallery, developers/tenant APIs — work for grid-edited versions.
         """
         draft.state = VersionStateChoice.PUBLISHED
-        update_fields = ["state", "updated_at"]
+        # Persist name/summary too: the service may have set them from the publish
+        # payload, and they must be written (not just held in memory).
+        update_fields = ["state", "name", "summary", "updated_at"]
         if not draft.file_url and draft.entries.exists():
             content = self.entries_to_csv_bytes(draft)
             filename = f"{draft.asset.slug}-{draft.name}.csv".replace(" ", "_")

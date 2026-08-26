@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils.translation import gettext as _
 
@@ -112,31 +113,42 @@ class AssetContentService:
         draft was started), the stale draft is rebuilt from that newer version so
         the editor always reflects the current content."""
         asset = self._get_asset_or_404(slug, category, publisher_q=publisher_q)
-        source = asset.get_latest_version()
-        existing = self.repo.get_draft(asset)
-        if existing is not None:
-            is_stale = source is not None and source.created_at > existing.created_at
-            if not is_stale:
+        # Lock the asset row so concurrent editor-opens can't both create a draft
+        # and violate the one-draft-per-asset constraint (which would 500).
+        try:
+            with transaction.atomic():
+                locked_asset = Asset.objects.select_for_update().get(pk=asset.pk)
+                source = locked_asset.get_latest_version()
+                existing = self.repo.get_draft(locked_asset)
+                if existing is not None:
+                    is_stale = source is not None and source.created_at > existing.created_at
+                    if not is_stale:
+                        return existing
+                    # A newer version exists than this draft — discard the stale
+                    # draft and rebuild it below from the current latest version.
+                    logger.info(
+                        f"Rebuilding stale draft [draft_id={existing.pk}, asset_id={locked_asset.pk}, "
+                        f"newer_version_id={source.pk}]"
+                    )
+                    self.repo.delete_version(existing)
+                # Versions carry distinct names, so a draft must not reuse the source
+                # version's name verbatim (it would collide with it on save).
+                base_name = source.name if source else _("Draft")
+                name = self.repo.unique_version_name(locked_asset, base_name)
+                summary = source.summary if source else ""
+                draft = self.repo.create_draft_seeded_from(
+                    locked_asset,
+                    source,
+                    name=name,
+                    summary=summary,
+                    created_by_id=created_by_id,
+                )
+        except IntegrityError:
+            # A concurrent request created the draft between our checks — return it.
+            existing = self.repo.get_draft(asset)
+            if existing is not None:
                 return existing
-            # A newer version exists than this draft — discard the stale draft and
-            # rebuild it below from the current latest version.
-            logger.info(
-                f"Rebuilding stale draft [draft_id={existing.pk}, asset_id={asset.pk}, "
-                f"newer_version_id={source.pk}]"
-            )
-            self.repo.delete_version(existing)
-        # Versions carry distinct names, so a draft must not reuse the source
-        # version's name verbatim (it would collide with it on save).
-        base_name = source.name if source else _("Draft")
-        name = self.repo.unique_version_name(asset, base_name)
-        summary = source.summary if source else ""
-        draft = self.repo.create_draft_seeded_from(
-            asset,
-            source,
-            name=name,
-            summary=summary,
-            created_by_id=created_by_id,
-        )
+            raise
         logger.info(
             f"Draft version created [version_id={draft.pk}, asset_id={asset.pk}, "
             f"seeded_from={source.pk if source else None}]"
@@ -218,6 +230,12 @@ class AssetContentService:
         """Publish a draft so it becomes the latest version, then notify."""
         asset = self._get_asset_or_404(slug, category, publisher_q=publisher_q)
         draft = self._get_editable_draft_or_400(asset, version_id)
+        if not draft.content_edited:
+            raise ItqanError(
+                error_name="no_changes_to_publish",
+                message=_("There are no changes to publish."),
+                status_code=400,
+            )
         if name is not None:
             draft.name = name
         if summary is not None:
