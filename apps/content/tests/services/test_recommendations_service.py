@@ -1,7 +1,7 @@
 from unittest.mock import patch
 
-import redis as redis_lib
 from model_bakery import baker
+import redis as redis_lib
 
 from apps.content.models import Asset, CategoryChoice, StatusChoice
 from apps.content.services.recommendations import (
