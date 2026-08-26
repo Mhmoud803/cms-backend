@@ -9,6 +9,7 @@ from django.shortcuts import redirect, render
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
 from django.utils.html import format_html
+from django.utils.translation import gettext_lazy as _
 
 from apps.content.repositories.access_request import AssetAccessRequestRepository
 from apps.content.services.admin.asset_recitation_audio_tracks_direct_upload_service import (
@@ -27,9 +28,11 @@ from .models import (
     AssetAccessRequest,
     AssetPreview,
     AssetVersion,
+    CategoryChoice,
     ContentIssueReport,
     Qiraah,
     RecitationAyahTiming,
+    RecitationFolder,
     RecitationSurahTrack,
     Reciter,
     Riwayah,
@@ -45,6 +48,22 @@ class AssetVersionInline(admin.TabularInline):
     extra = 0
     fields = ["name", "file_url"]
     readonly_fields = ["created_at"]
+
+
+class RecitationFolderInline(admin.TabularInline):
+    """Variants of a recitation, shown inline on the Asset page."""
+
+    model = RecitationFolder
+    extra = 0
+    fields = ["name_ar", "name_en", "slug", "is_default", "tracks_count"]
+    readonly_fields = ["slug", "tracks_count"]
+
+    @admin.display(description="Tracks")
+    def tracks_count(self, obj: RecitationFolder) -> int:
+        return obj.tracks.count() if obj.pk else 0
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).order_by("-is_default", "name")
 
 
 @admin.register(Asset)
@@ -73,6 +92,13 @@ class AssetAdmin(admin.ModelAdmin):
     ]
     search_fields = ["name", "description", "long_description"]
     inlines = [AssetVersionInline]
+
+    def get_inlines(self, request, obj=None):
+        # Folders only mean something for recitations, so keep them off other categories.
+        inlines = list(super().get_inlines(request, obj))
+        if obj and obj.category == CategoryChoice.RECITATION:
+            inlines.append(RecitationFolderInline)
+        return inlines
 
     # Custom change form for actions for recitation assets
     change_form_template = "content/admin/asset_change_form.html"
@@ -262,12 +288,14 @@ class AssetAdmin(admin.ModelAdmin):
             return redirect(reverse("admin:content_asset_change", args=[asset_id]))
 
         try:
-            sync_asset_recitations_json_file(asset_id=asset_id)
+            # No folder given: syncs the default folder. Other variants are synced
+            # from the portal API, which passes an explicit folder_id.
+            _version, filename = sync_asset_recitations_json_file(asset_id=asset_id)
         except Exception as e:
             self.message_user(request, f"Sync failed: {e}", level="ERROR")
             return redirect(reverse("admin:content_asset_change", args=[asset_id]))
 
-        self.message_user(request, "Asset Recitation Downloaded JSON File Synced Successfully.")
+        self.message_user(request, f"Default folder JSON synced successfully ({filename}).")
         return redirect(reverse("admin:content_asset_change", args=[asset_id]))
 
     def bulk_upload_ayahs_timestamps_view(self, request, asset_id: int):
@@ -315,7 +343,7 @@ class AssetAdmin(admin.ModelAdmin):
     # -------- Direct-to-R2 Upload Views (Admin-only) --------
     def upload_page(self, request: HttpRequest, asset_id: int) -> HttpResponse:
         if not request.user.is_staff:
-            raise PermissionDenied("Staff only")
+            raise PermissionDenied(_("Staff only"))
         form = DirectUploadRecitationsForm()
         ctx = {
             **self.admin_site.each_context(request),
@@ -331,9 +359,9 @@ class AssetAdmin(admin.ModelAdmin):
 
     def uploads_start_view(self, request: HttpRequest) -> JsonResponse:
         if not request.user.is_staff:
-            raise PermissionDenied("Staff only")
+            raise PermissionDenied(_("Staff only"))
         if request.method != "POST":
-            return JsonResponse({"error_name": "method_not_allowed", "message": "POST required"}, status=405)
+            return JsonResponse({"error_name": "method_not_allowed", "message": str(_("POST required"))}, status=405)
         try:
             if request.content_type == "application/json":
                 body = json.loads(request.body or "{}")
@@ -358,15 +386,15 @@ class AssetAdmin(admin.ModelAdmin):
         except Exception:
             logger.exception(f"uploads_start_view failed (asset_id={locals().get('asset_id')})")
             return JsonResponse(
-                {"error_name": "server_error", "message": "An unexpected error occurred"},
+                {"error_name": "server_error", "message": str(_("An unexpected error occurred"))},
                 status=500,
             )
 
     def uploads_sign_part_view(self, request: HttpRequest) -> JsonResponse:
         if not request.user.is_staff:
-            raise PermissionDenied("Staff only")
+            raise PermissionDenied(_("Staff only"))
         if request.method != "POST":
-            return JsonResponse({"error_name": "method_not_allowed", "message": "POST required"}, status=405)
+            return JsonResponse({"error_name": "method_not_allowed", "message": str(_("POST required"))}, status=405)
         try:
             body = json.loads(request.body or "{}")
             service = AssetRecitationAudioTracksDirectUploadService()
@@ -388,15 +416,15 @@ class AssetAdmin(admin.ModelAdmin):
                     part_number={(locals().get('body') or {}).get('partNumber')}\
                 )")
             return JsonResponse(
-                {"error_name": "server_error", "message": "An unexpected error occurred"},
+                {"error_name": "server_error", "message": str(_("An unexpected error occurred"))},
                 status=500,
             )
 
     def uploads_finish_view(self, request: HttpRequest) -> JsonResponse:
         if not request.user.is_staff:
-            raise PermissionDenied("Staff only")
+            raise PermissionDenied(_("Staff only"))
         if request.method != "POST":
-            return JsonResponse({"error_name": "method_not_allowed", "message": "POST required"}, status=405)
+            return JsonResponse({"error_name": "method_not_allowed", "message": str(_("POST required"))}, status=405)
         try:
             body = json.loads(request.body or "{}")
             service = AssetRecitationAudioTracksDirectUploadService()
@@ -420,15 +448,15 @@ class AssetAdmin(admin.ModelAdmin):
                     upload_id={(locals().get('body') or {}).get('uploadId')}\
                 )")
             return JsonResponse(
-                {"error_name": "server_error", "message": "An unexpected error occurred"},
+                {"error_name": "server_error", "message": str(_("An unexpected error occurred"))},
                 status=500,
             )
 
     def uploads_abort_view(self, request: HttpRequest) -> JsonResponse:
         if not request.user.is_staff:
-            raise PermissionDenied("Staff only")
+            raise PermissionDenied(_("Staff only"))
         if request.method != "POST":
-            return JsonResponse({"error_name": "method_not_allowed", "message": "POST required"}, status=405)
+            return JsonResponse({"error_name": "method_not_allowed", "message": str(_("POST required"))}, status=405)
         try:
             body = json.loads(request.body or "{}")
             service = AssetRecitationAudioTracksDirectUploadService()
@@ -444,15 +472,15 @@ class AssetAdmin(admin.ModelAdmin):
                     upload_id={(locals().get('body') or {}).get('uploadId')}\
                 )")
             return JsonResponse(
-                {"error_name": "server_error", "message": "An unexpected error occurred"},
+                {"error_name": "server_error", "message": str(_("An unexpected error occurred"))},
                 status=500,
             )
 
     def validate_recitation_filenames_view(self, request: HttpRequest) -> JsonResponse:
         if not request.user.is_staff:
-            raise PermissionDenied("Staff only")
+            raise PermissionDenied(_("Staff only"))
         if request.method != "POST":
-            return JsonResponse({"error_name": "method_not_allowed", "message": "POST required"}, status=405)
+            return JsonResponse({"error_name": "method_not_allowed", "message": str(_("POST required"))}, status=405)
 
         try:
             from apps.mixins.recitations_helpers import extract_surah_number_from_mp3_filename
@@ -475,11 +503,14 @@ class AssetAdmin(admin.ModelAdmin):
                 try:
                     surah_number = extract_surah_number_from_mp3_filename(filename)
 
-                    # Check if track already exists in database
+                    # Check if track already exists in database. Scoped to the default
+                    # folder, which is where admin uploads land -- an asset-wide check
+                    # would report "exists" for a surah only present in another variant.
                     exists = False
                     if asset_id:
                         exists = RecitationSurahTrack.objects.filter(
                             asset_id=int(asset_id),
+                            folder__is_default=True,
                             surah_number=surah_number,
                         ).exists()
 
@@ -770,11 +801,27 @@ class RiwayahAdmin(admin.ModelAdmin):
     )
 
 
+@admin.register(RecitationFolder)
+class RecitationFolderAdmin(admin.ModelAdmin):
+    list_display = ["id", "asset", "name", "slug", "is_default", "tracks_count", "created_at"]
+    list_filter = ["is_default", "created_at"]
+    search_fields = ["name", "slug", "asset__name"]
+    readonly_fields = ["slug", "created_at", "updated_at"]
+
+    @admin.display(description="Tracks")
+    def tracks_count(self, obj: RecitationFolder) -> int:
+        return obj.tracks.count()
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("asset")
+
+
 @admin.register(RecitationSurahTrack)
 class RecitationSurahTrackAdmin(admin.ModelAdmin):
     list_display = [
         "id",
         "asset",
+        "folder",
         "surah_number",
         "surah_name",
         "surah_name_en",
@@ -782,8 +829,9 @@ class RecitationSurahTrackAdmin(admin.ModelAdmin):
         "size_bytes",
         "created_at",
     ]
-    list_filter = ["asset", "created_at"]
-    search_fields = ["asset__name"]
+    list_filter = ["asset", "folder__is_default", "created_at"]
+    search_fields = ["asset__name", "folder__name", "folder__slug"]
+    raw_id_fields = ["folder"]
     readonly_fields = [
         "surah_name",
         "surah_name_en",
@@ -806,7 +854,7 @@ class RecitationSurahTrackAdmin(admin.ModelAdmin):
             return QURAN_SURAHS[obj.surah_number]["name_en"]
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related("asset")
+        return super().get_queryset(request).select_related("asset", "folder")
 
 
 @admin.register(RecitationAyahTiming)

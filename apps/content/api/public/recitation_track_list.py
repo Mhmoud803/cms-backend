@@ -4,11 +4,13 @@ from typing import Literal
 from django.core.cache import cache
 from django.db.models import Q
 from django.http import Http404, HttpResponse
+from django.utils.translation import gettext_lazy as _
 from ninja import Query, Schema
 
 from apps.content.cache import (
     RECITATION_ASSET_META_CACHE_TTL,
     RECITATION_RESPONSE_CACHE_TTL,
+    folder_cache_token,
     recitation_asset_meta_cache_key,
     recitation_response_cache_key,
 )
@@ -53,7 +55,7 @@ class RecitationSurahTrackOut(Schema):
         200: list[RecitationSurahTrackOut],
         401: NinjaErrorResponse[Literal["authentication_required"]],
         403: NinjaErrorResponse[Literal["access_denied"]],
-        404: NinjaErrorResponse[Literal["not_found"]],
+        404: NinjaErrorResponse[Literal["not_found"]] | NinjaErrorResponse[Literal["folder_not_found"]],
     },
 )
 @track_usage()
@@ -62,16 +64,28 @@ def list_recitation_tracks(
     asset_id: int,
     page: int = Query(1, ge=1, le=114),
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1),
+    folder: str | None = Query(None),
 ):
     page_size = min(page_size, PUBLIC_RECITATION_MAX_PAGE_SIZE)
 
-    _resp_key = recitation_response_cache_key(asset_id, page, page_size)
+    # Key on the *requested* folder rather than the resolved one: resolving it would
+    # need a DB read before the cache lookup, defeating the warm-cache no-query
+    # guarantee. folder_cache_token keeps the raw value safe to embed in a key.
+    _resp_key = recitation_response_cache_key(asset_id, page, page_size, folder_cache_token(folder))
     _meta_key = recitation_asset_meta_cache_key(asset_id)
 
     cached_resp: bytes | None = cache.get(_resp_key)
     cached_meta: dict | None = cache.get(_meta_key)
 
-    if cached_resp is not None and cached_meta is not None:
+    if cached_resp is not None and cached_meta is not None and "is_open_access" in cached_meta:
+        is_open_access: bool = cached_meta["is_open_access"]
+        if not is_open_access:
+            enforce_asset_access_on_public_api(
+                getattr(request, "user", None),
+                asset_id=asset_id,
+                is_open_access=is_open_access,
+            )
+
         track_extra(
             request,
             entity_type="recitation_track",
@@ -82,7 +96,7 @@ def list_recitation_tracks(
             publisher_names=[cached_meta["publisher_name"]] if cached_meta["publisher_id"] else [],
         )
         resp = HttpResponse(cached_resp, content_type="application/json")
-        resp["Cache-Control"] = "public, max-age=300, s-maxage=300"
+        resp["Cache-Control"] = "public, max-age=300, s-maxage=300" if is_open_access else "private, no-cache"
         return resp
 
     # Cache miss - hit DB.
@@ -91,7 +105,7 @@ def list_recitation_tracks(
 
     asset = repo.get_asset_object(asset_id, Q(restricted_for_tenant=False))
     if not asset:
-        raise Http404("No asset matches the given query.")
+        raise Http404(str(_("No asset matches the given query.")))
 
     enforce_asset_access_on_public_api(getattr(request, "user", None), asset)
 
@@ -101,6 +115,7 @@ def list_recitation_tracks(
         "name_ar": asset.name_ar,
         "publisher_id": asset.publisher_id,
         "publisher_name": publisher_name,
+        "is_open_access": asset.is_open_access,
     }
 
     track_extra(
@@ -113,7 +128,12 @@ def list_recitation_tracks(
         publisher_names=[publisher_name] if asset.publisher_id else [],
     )
 
-    tracks = service.get_asset_tracks(asset_id, Q(asset__restricted_for_tenant=False), prefetch_timings=True)
+    tracks = service.get_asset_tracks(
+        asset_id,
+        Q(asset__restricted_for_tenant=False),
+        prefetch_timings=True,
+        folder=folder,
+    )
 
     all_results = []
     for track in tracks:
@@ -154,5 +174,5 @@ def list_recitation_tracks(
     cache.set(_meta_key, asset_meta, RECITATION_ASSET_META_CACHE_TTL)
 
     resp = HttpResponse(response_bytes, content_type="application/json")
-    resp["Cache-Control"] = "public, max-age=300, s-maxage=300"
+    resp["Cache-Control"] = "public, max-age=300, s-maxage=300" if asset.is_open_access else "private, no-cache"
     return resp

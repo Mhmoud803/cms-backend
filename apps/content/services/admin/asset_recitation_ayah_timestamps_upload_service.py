@@ -7,8 +7,10 @@ import logging
 from typing import TypedDict
 
 from django.db import transaction
+from django.utils.translation import gettext_lazy as _
 
-from apps.content.models import Asset, RecitationAyahTiming, RecitationSurahTrack
+from apps.content.models import Asset, RecitationAyahTiming, RecitationFolder, RecitationSurahTrack
+from apps.core.ninja_utils.errors import ItqanError
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,7 @@ def _parse_json_bytes(data: bytes) -> tuple[int, list[AyahRow]]:
     """
     payload = json.loads(data.decode("utf-8"))
     if "surah_id" not in payload:
-        raise ValueError("Missing surah_id in uploaded JSON")
+        raise ValueError(_("Missing surah_id in uploaded JSON"))
 
     surah_number = int(payload["surah_id"])
     ayahs = payload.get("ayahs") or []
@@ -58,7 +60,7 @@ def _parse_json_bytes(data: bytes) -> tuple[int, list[AyahRow]]:
         start_ms = _sec_to_ms(item["start"])
         end_ms = _sec_to_ms(item["end"])
         if end_ms < start_ms:
-            raise ValueError(f"Invalid timing for ayah {ayah_number}: end < start")
+            raise ValueError(_("Invalid timing for ayah {ayah_number}: end < start").format(ayah_number=ayah_number))
         rows.append(
             AyahRow(
                 surah_number=surah_number,
@@ -79,10 +81,11 @@ class ResultDict(TypedDict):
     file_errors: list[str]
 
 
-def bulk_upload_recitation_ayah_timestamps(asset_id: int, files: Iterable) -> ResultDict:
+def bulk_upload_recitation_ayah_timestamps(asset_id: int, files: Iterable, folder_id: int | None = None) -> ResultDict:
     """
-    Import ayah timings JSON files for a given asset.
+    Import ayah timings JSON files for one folder (variant) of a given asset.
     - files: iterable of UploadedFile objects (each file for a surah)
+    - folder_id: the variant these timings belong to; defaults to the asset's default folder
     Behavior:
     - Create new timings when missing
     - Update existing timings only when values differ
@@ -91,10 +94,27 @@ def bulk_upload_recitation_ayah_timestamps(asset_id: int, files: Iterable) -> Re
     Returns a stats dict with counts and details.
     """
     asset = Asset.objects.get(pk=asset_id)
-    logger.info(f"Ayah timestamps upload started [asset_id={asset_id}]")
 
-    # Preload tracks for the asset
-    tracks = RecitationSurahTrack.objects.filter(asset=asset).only("id", "surah_number")
+    if folder_id is not None:
+        folder = RecitationFolder.objects.filter(pk=folder_id, asset_id=asset_id).first()
+    else:
+        folder = RecitationFolder.objects.filter(asset_id=asset_id, is_default=True).first()
+
+    if not folder:
+        raise ItqanError(
+            error_name="folder_not_found",
+            message=_("Folder {folder_id} not found for asset {asset_id}.").format(
+                folder_id=folder_id, asset_id=asset_id
+            ),
+            status_code=404,
+        )
+
+    logger.info(f"Ayah timestamps upload started [asset_id={asset_id}, folder_id={folder.pk}]")
+
+    # Preload tracks for this folder only. Scoping by asset would collapse the
+    # per-surah map across variants and write the timings to an arbitrary one --
+    # echo/delay variants have genuinely different offsets.
+    tracks = RecitationSurahTrack.objects.filter(asset=asset, folder=folder).only("id", "surah_number")
     track_by_surah = {t.surah_number: t for t in tracks}
 
     created_total = 0

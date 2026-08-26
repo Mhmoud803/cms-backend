@@ -6,6 +6,7 @@ from model_bakery import baker
 from apps.core.permissions import PermissionChoice
 from apps.core.tests.base import BaseTestCase
 from apps.users.models import User
+from apps.users.services.group import ITQAN_INTERNAL_GROUP
 
 
 class CreateGroupTest(BaseTestCase):
@@ -91,6 +92,51 @@ class ListGroupTest(BaseTestCase):
         self.assertEqual(200, response.status_code, response.content)
         names = {item["name"] for item in response.json()["results"]}
         self.assertGreaterEqual(names, {"Editors", "Reviewers"})
+
+    def test_list_groups_where_itqan_internal_exists_should_exclude_it(self) -> None:
+        # Arrange
+        self.authenticate_user(self.user)
+        self.give_permission(self.user, PermissionChoice.PORTAL_READ_GROUP)
+        Group.objects.get_or_create(name=ITQAN_INTERNAL_GROUP)
+        baker.make(Group, name="Editors")
+
+        # Act
+        response = self.client.get(self.url)
+
+        # Assert
+        self.assertEqual(200, response.status_code, response.content)
+        names = {item["name"] for item in response.json()["results"]}
+        self.assertIn("Editors", names)
+        self.assertNotIn(ITQAN_INTERNAL_GROUP, names)
+
+    def test_list_groups_where_staff_user_should_still_exclude_itqan_internal(self) -> None:
+        # Arrange: hidden for everyone, staff included.
+        staff = baker.make(User, is_staff=True)
+        self.authenticate_user(staff)
+        self.give_permission(staff, PermissionChoice.PORTAL_READ_GROUP)
+        Group.objects.get_or_create(name=ITQAN_INTERNAL_GROUP)
+
+        # Act
+        response = self.client.get(self.url)
+
+        # Assert
+        self.assertEqual(200, response.status_code, response.content)
+        names = {item["name"] for item in response.json()["results"]}
+        self.assertNotIn(ITQAN_INTERNAL_GROUP, names)
+
+    def test_list_groups_where_searching_for_itqan_internal_should_return_nothing(self) -> None:
+        # Arrange: the exclusion must survive the search filter, not just the plain listing.
+        self.authenticate_user(self.user)
+        self.give_permission(self.user, PermissionChoice.PORTAL_READ_GROUP)
+        Group.objects.get_or_create(name=ITQAN_INTERNAL_GROUP)
+
+        # Act
+        response = self.client.get(self.url, {"search": "Itqan"})
+
+        # Assert
+        self.assertEqual(200, response.status_code, response.content)
+        names = {item["name"] for item in response.json()["results"]}
+        self.assertNotIn(ITQAN_INTERNAL_GROUP, names)
 
     def test_list_groups_where_no_permission_should_return_403(self) -> None:
         # Arrange
@@ -197,7 +243,7 @@ class SetGroupPermissionsTest(BaseTestCase):
             content_type="application/json",
         )
 
-    def test_set_permissions_where_create_given_should_apply_implied_read(self) -> None:
+    def test_set_permissions_where_create_given_should_apply_implied_read_and_update(self) -> None:
         # Arrange
         self.authenticate_user(self.user)
         self.give_permission(self.user, PermissionChoice.PORTAL_UPDATE_GROUP)
@@ -207,19 +253,16 @@ class SetGroupPermissionsTest(BaseTestCase):
         response = self._set_permissions(group.id, [PermissionChoice.PORTAL_CREATE_RECITER.value])
 
         # Assert
+        # CREATE and UPDATE are mutually implied, so both land alongside READ.
+        expected = {
+            PermissionChoice.PORTAL_CREATE_RECITER.value,
+            PermissionChoice.PORTAL_UPDATE_RECITER.value,
+            PermissionChoice.PORTAL_READ_RECITER.value,
+        }
         self.assertEqual(200, response.status_code, response.content)
-        self.assertEqual(
-            {
-                PermissionChoice.PORTAL_CREATE_RECITER.value,
-                PermissionChoice.PORTAL_READ_RECITER.value,
-            },
-            set(response.json()["permissions"]),
-        )
+        self.assertEqual(expected, set(response.json()["permissions"]))
         stored = {perm.codename for perm in group.permissions.all()}
-        self.assertEqual(
-            {PermissionChoice.PORTAL_CREATE_RECITER.value, PermissionChoice.PORTAL_READ_RECITER.value},
-            stored,
-        )
+        self.assertEqual(expected, stored)
 
     def test_set_permissions_where_called_again_should_replace_not_accumulate(self) -> None:
         # Arrange

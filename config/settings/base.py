@@ -163,6 +163,17 @@ CLOUDFLARE_R2_ACCESS_KEY_ID = config("CLOUDFLARE_R2_ACCESS_KEY_ID", default="")
 CLOUDFLARE_R2_SECRET_ACCESS_KEY = config("CLOUDFLARE_R2_SECRET_ACCESS_KEY", default="")
 CLOUDFLARE_R2_PUBLIC_BASE_URL = config("CLOUDFLARE_R2_PUBLIC_BASE_URL", default="")
 
+# Read-only ayah-slicing sizing inputs for the estimate_ayah_slicing_size management
+# command (issue #412 storage-sizing criterion). All optional: a value of 0 disables
+# the corresponding section of the report instead of inventing numbers.
+# Cost rates (R2_STORAGE_COST_PER_GB_MONTH / R2_EGRESS_COST_PER_GB) are per decimal
+# GB: 1 GB = 1,000,000,000 bytes, matching the estimator's cost calculations.
+AYAH_SLICING_ESTIMATED_OUTPUT_BITRATE = config("AYAH_SLICING_ESTIMATED_OUTPUT_BITRATE", cast=int, default=0)
+AYAH_SLICING_WARN_OBJECT_COUNT = config("AYAH_SLICING_WARN_OBJECT_COUNT", cast=int, default=0)
+AYAH_SLICING_WARN_ESTIMATED_BYTES = config("AYAH_SLICING_WARN_ESTIMATED_BYTES", cast=int, default=0)
+R2_STORAGE_COST_PER_GB_MONTH = config("R2_STORAGE_COST_PER_GB_MONTH", cast=float, default=0)
+R2_EGRESS_COST_PER_GB = config("R2_EGRESS_COST_PER_GB", cast=float, default=0)
+
 # Use R2 if configured, otherwise fall back to local storage
 if CLOUDFLARE_R2_ENDPOINT:
     CLOUDFLARE_R2_CONFIG_OPTIONS = {
@@ -284,6 +295,8 @@ CELERY_TASK_SOFT_TIME_LIMIT = 60
 CELERY_WORKER_SEND_TASK_EVENTS = True
 CELERY_TASK_SEND_SENT_EVENT = True
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False
+
+PENDING_ACCESS_REQUEST_NOTIFICATION_HOUR = config("PENDING_ACCESS_REQUEST_NOTIFICATION_HOUR", default=9, cast=int)
 
 # Site ID (required for allauth)
 SITE_ID = 1
@@ -564,11 +577,19 @@ MIXPANEL_INGEST_HOST = config("MIXPANEL_INGEST_HOST", default="api-eu.mixpanel.c
 if MIXPANEL_ENABLED:
     LOCAL_APPS.append("apps.usage_tracking")
 
+# Audio usage sync from Cloudflare to Mixpanel
+CF_ZONE_ID = config("CF_ZONE_ID", default="")
+CF_API_TOKEN = config("CF_API_TOKEN", default="")
+CF_R2_CUSTOM_DOMAIN = config("CF_R2_CUSTOM_DOMAIN", default="")
+ENABLE_AUDIO_USAGE_SYNC = config("ENABLE_AUDIO_USAGE_SYNC", default=False, cast=bool)
+AUDIO_USAGE_SYNC_WINDOW_HOURS = config("AUDIO_USAGE_SYNC_WINDOW_HOURS", default=6, cast=int)
+
 
 # plain_permissions settings
 PERMISSIONS_SETTINGS = {
     "PERMISSIONS": PermissionChoice.choices,
     "MONKEYPATCH_USER": True,
+    "OVERRIDE_GROUP_ADMIN": False,
 }
 
 NINJA_KEYS_API_KEY_MODEL = "users.APIKey"

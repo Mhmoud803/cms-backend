@@ -13,6 +13,7 @@ from apps.content.services.asset_access import (
 from apps.core.ninja_utils.errors import ItqanError
 from apps.core.tests.base import BaseTestCase
 from apps.publishers.models import Publisher, PublisherMember
+from apps.publishers.tests.group_helpers import admin_group
 from apps.users.models import User
 
 
@@ -44,7 +45,7 @@ class AssetAccessRequestServiceTests(BaseTestCase):
         PublisherMember.objects.create(
             user=self.member,
             publisher=self.publisher,
-            role=PublisherMember.RoleChoice.ADMIN,
+            group=admin_group(),
             status=PublisherMember.StatusChoice.ACTIVE,
         )
         self.staff = baker.make(User, is_staff=True)
@@ -256,7 +257,6 @@ class GuardRestrictForTenantTests(BaseTestCase):
 
 
 _OUTCOME_TASK = "apps.content.tasks.send_access_request_outcome_email"
-_NEW_REQUEST_TASK = "apps.content.tasks.send_access_request_new_request_email"
 
 
 class AssetAccessRequestServiceNotificationsTests(BaseTestCase):
@@ -274,7 +274,7 @@ class AssetAccessRequestServiceNotificationsTests(BaseTestCase):
         PublisherMember.objects.create(
             user=self.member,
             publisher=self.publisher,
-            role=PublisherMember.RoleChoice.ADMIN,
+            group=admin_group(),
             status=PublisherMember.StatusChoice.ACTIVE,
         )
 
@@ -304,39 +304,36 @@ class AssetAccessRequestServiceNotificationsTests(BaseTestCase):
 
         mock_task.delay.assert_called_once_with(req.id)
 
-    def test_request_access_pending_enqueues_new_request_email_only(self):
+    def test_request_access_where_new_request_should_not_send_immediate_publisher_email(self):
         asset = _make_asset(self.publisher, auto_accept=False)
 
-        with patch(_NEW_REQUEST_TASK) as mock_new, patch(_OUTCOME_TASK) as mock_outcome:
+        with patch(_OUTCOME_TASK) as mock_outcome:
             request, _access = self.service.request_access(
                 user=self.developer, asset=asset, purpose="purpose", intended_use="non-commercial"
             )
 
-        mock_new.delay.assert_called_once_with(request.id)
         mock_outcome.delay.assert_not_called()
 
-    def test_request_access_auto_accept_enqueues_both_emails(self):
+    def test_request_access_auto_accept_enqueues_outcome_email(self):
         asset = _make_asset(self.publisher, auto_accept=True)
 
-        with patch(_NEW_REQUEST_TASK) as mock_new, patch(_OUTCOME_TASK) as mock_outcome:
+        with patch(_OUTCOME_TASK) as mock_outcome:
             request, _access = self.service.request_access(
                 user=self.developer, asset=asset, purpose="purpose", intended_use="non-commercial"
             )
 
-        mock_new.delay.assert_called_once_with(request.id)
         mock_outcome.delay.assert_called_once_with(request.id)
 
-    def test_request_access_existing_pending_does_not_double_send_new_request_email(self):
+    def test_request_access_existing_pending_does_not_send_outcome_email(self):
         asset = _make_asset(self.publisher, auto_accept=False)
         existing = self._make_request(asset)
 
-        with patch(_NEW_REQUEST_TASK) as mock_new, patch(_OUTCOME_TASK) as mock_outcome:
+        with patch(_OUTCOME_TASK) as mock_outcome:
             request, _access = self.service.request_access(
                 user=self.developer, asset=asset, purpose="purpose", intended_use="non-commercial"
             )
 
         self.assertEqual(existing.id, request.id)
-        mock_new.delay.assert_not_called()
         mock_outcome.delay.assert_not_called()
 
     def test_request_access_existing_pending_auto_accept_enqueues_outcome_email(self):
@@ -345,11 +342,10 @@ class AssetAccessRequestServiceNotificationsTests(BaseTestCase):
         self.publisher.auto_accept_access_requests = True
         self.publisher.save(update_fields=["auto_accept_access_requests"])
 
-        with patch(_NEW_REQUEST_TASK) as mock_new, patch(_OUTCOME_TASK) as mock_outcome:
+        with patch(_OUTCOME_TASK) as mock_outcome:
             request, _access = self.service.request_access(
                 user=self.developer, asset=asset, purpose="purpose", intended_use="non-commercial"
             )
 
         self.assertEqual(existing.id, request.id)
-        mock_new.delay.assert_not_called()
         mock_outcome.delay.assert_called_once_with(request.id)
