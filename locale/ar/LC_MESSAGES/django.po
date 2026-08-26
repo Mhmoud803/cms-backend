@@ -165,6 +165,9 @@ msgstr "مسودة"
 msgid "Ready"
 msgstr "جاهز"
 
+msgid "Published"
+msgstr "منشور"
+
 msgid "Twassut"
 msgstr "توسط"
 
@@ -304,6 +307,24 @@ msgstr "مطلوب مفتاح API للوصول إلى محتوى هذا الأص
 
 msgid "You don't have an approved access request for this asset."
 msgstr "ليس لديك طلب وصول مُوافَق عليه لهذا الأصل."
+
+#, python-brace-format
+msgid "{category} with slug {slug} not found."
+msgstr ""
+
+#, python-brace-format
+msgid "Version with id {id} not found."
+msgstr ""
+
+msgid "Only draft versions can be edited."
+msgstr ""
+
+#, python-brace-format
+msgid "Could not parse the uploaded content file: {reason}"
+msgstr ""
+
+msgid "There are no changes to publish."
+msgstr "لا توجد تغييرات للنشر."
 
 #, python-brace-format
 msgid "Publisher with id {id} not found."

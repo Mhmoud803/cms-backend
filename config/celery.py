@@ -48,6 +48,9 @@ app.conf.beat_schedule = {
     "compute-similar-recommendations": {
         "task": "apps.content.tasks.compute_similar_recommendations_task",
         "schedule": crontab(minute=0, hour=2),
+    "cleanup-abandoned-content-drafts": {
+        "task": "apps.content.tasks.cleanup_abandoned_content_drafts_task",
+        "schedule": crontab(minute=30, hour="*/6"),
     },
 }
 
