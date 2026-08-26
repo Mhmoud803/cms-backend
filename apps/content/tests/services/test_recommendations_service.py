@@ -22,7 +22,12 @@ _GET_REDIS = "apps.content.services.recommendations.get_recommendations_redis"
 
 
 def _test_redis_client() -> redis_lib.Redis:
-    return redis_lib.Redis(host="localhost", port=6379, db=15, decode_responses=True)
+    from django_redis import get_redis_connection
+
+    kwargs = dict(get_redis_connection("default").connection_pool.connection_kwargs)
+    kwargs["db"] = 15
+    kwargs["decode_responses"] = True
+    return redis_lib.Redis(**kwargs)
 
 
 class RecommendationsServiceTest(BaseTestCase):
