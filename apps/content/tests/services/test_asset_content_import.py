@@ -1,22 +1,19 @@
 from django.test import SimpleTestCase
 
-from apps.content.services.asset_content_import import (
-    AssetContentParseError,
-    parse_content_file,
-)
+from apps.content.services.asset_content_import import AssetContentParseError, parse_content_file
 
 _TRANSLATION_CSV = (
     b'"Translation Info:\n# preamble line",,,,\n'
     b"id,sura,aya,translation,footnotes\n"
     b'1,1,1,"In the name of Allah","[note]"\n'
-    b'2,1,2,"All praise","\"\n'
+    b'2,1,2,"All praise",""\n'
 )
 
 _TAFSIR_CSV = (
     "﻿المشروع,نوع المشروع,السورة,رقم السورة,رقم الآية,الآية,"
     "مرحلة العمل,قابل للنشر,المستخدم,المحتوى,الهامش\n"
     "تفسير,آية,الفاتحة,1,1,بسم,مرحلة,نعم,مستخدم,محتوى الآية,هامش\n"
-).encode("utf-8")
+).encode()
 
 
 class ParseContentFileTest(SimpleTestCase):

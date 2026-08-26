@@ -16,10 +16,10 @@ different schemas without a per-category branch at the call site.
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
 import io
 import logging
 import sys
-from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +66,7 @@ def _find_header_row(rows: list[list[str]]) -> int:
         normalized = {cell.strip().lower() for cell in row}
         if normalized & _SURA_HEADERS and normalized & _AYA_HEADERS:
             return index
-    raise AssetContentParseError(
-        "No recognisable header row (expected sura/aya + text columns)."
-    )
+    raise AssetContentParseError("No recognisable header row (expected sura/aya + text columns).")
 
 
 def _column_map(header: list[str]) -> dict[str, int]:
@@ -87,9 +85,7 @@ def _column_map(header: list[str]) -> dict[str, int]:
 
     missing = {"sura", "aya", "text"} - mapping.keys()
     if missing:
-        raise AssetContentParseError(
-            f"Header is missing required columns: {', '.join(sorted(missing))}."
-        )
+        raise AssetContentParseError(f"Header is missing required columns: {', '.join(sorted(missing))}.")
     return mapping
 
 
@@ -125,9 +121,7 @@ def parse_content_file(raw: bytes) -> list[ParsedEntry]:
         if footnote_col is not None and len(row) > footnote_col:
             footnotes = (row[footnote_col] or "").strip()
 
-        entries[(sura, aya)] = ParsedEntry(
-            sura=sura, aya=aya, text=content, footnotes=footnotes
-        )
+        entries[(sura, aya)] = ParsedEntry(sura=sura, aya=aya, text=content, footnotes=footnotes)
 
     if not entries:
         raise AssetContentParseError("No ayah rows found after the header.")

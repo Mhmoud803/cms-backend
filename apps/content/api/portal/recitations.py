@@ -11,11 +11,11 @@ from apps.content.models import (
     Asset,
     CategoryChoice,
     LicenseChoice,
+    RecitationFolder,
     Riwayah,
     StatusChoice,
     VersionStateChoice,
 )
-from apps.content.models import Asset, CategoryChoice, LicenseChoice, RecitationFolder, Riwayah, StatusChoice
 from apps.content.services.recitation import RecitationService
 from apps.content.services.recitation_folder_resolution import sorted_asset_folders
 from apps.core.ninja_utils.errors import ItqanError, NinjaErrorResponse

@@ -259,9 +259,7 @@ class Asset(DeleteFilesOnDeleteMixin, BaseModel):
         return int(size * units.get(unit, 1))
 
     def get_latest_version(self):
-        return (
-            self.versions.filter(state=VersionStateChoice.PUBLISHED).order_by("-created_at").first()
-        )
+        return self.versions.filter(state=VersionStateChoice.PUBLISHED).order_by("-created_at").first()
 
     @property
     def human_readable_size(self):
@@ -374,9 +372,7 @@ class AssetVersionEntry(BaseModel):
     )
     text = models.TextField(blank=True, help_text="Translation / tafsir text for this ayah")
     footnotes = models.TextField(blank=True, help_text="Footnotes or margin content for this ayah")
-    order = models.PositiveIntegerField(
-        default=0, help_text="Display order (defaults to the canonical ayah index)"
-    )
+    order = models.PositiveIntegerField(default=0, help_text="Display order (defaults to the canonical ayah index)")
 
     class Meta:
         constraints = [

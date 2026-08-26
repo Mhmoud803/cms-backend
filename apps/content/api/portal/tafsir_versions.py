@@ -72,9 +72,7 @@ def list_tafsir_versions(request: Request, tafsir_slug: str):
             message=_("Tafsir with slug {slug} not found.").format(slug=tafsir_slug),
             status_code=404,
         ) from exc
-    return AssetVersion.objects.filter(asset=asset, state=VersionStateChoice.PUBLISHED).order_by(
-        "-created_at"
-    )
+    return AssetVersion.objects.filter(asset=asset, state=VersionStateChoice.PUBLISHED).order_by("-created_at")
 
 
 @router.post(

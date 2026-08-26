@@ -5,8 +5,8 @@ Handles usage event tracking and analytics computations
 
 from __future__ import annotations
 
-import logging
 from datetime import timedelta
+import logging
 from typing import TYPE_CHECKING, TypedDict
 
 from celery import shared_task
@@ -270,9 +270,7 @@ def cleanup_abandoned_content_drafts_task(older_than_hours: int = 24) -> dict[st
     Returns:
         Dictionary with the number of drafts deleted.
     """
-    logger.info(
-        f"Task started [task=cleanup_abandoned_content_drafts_task, older_than_hours={older_than_hours}]"
-    )
+    logger.info(f"Task started [task=cleanup_abandoned_content_drafts_task, older_than_hours={older_than_hours}]")
     from django.utils import timezone
 
     from apps.content.models import AssetVersion, VersionStateChoice

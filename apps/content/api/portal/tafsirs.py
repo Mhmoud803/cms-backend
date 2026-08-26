@@ -6,14 +6,7 @@ from ninja import Field, File, FilterLookup, FilterSchema, Form, Query, Schema, 
 from ninja.pagination import paginate
 from pydantic import AwareDatetime
 
-from apps.content.models import (
-    Asset,
-    AssetVersion,
-    CategoryChoice,
-    LicenseChoice,
-    StatusChoice,
-    VersionStateChoice,
-)
+from apps.content.models import Asset, AssetVersion, CategoryChoice, LicenseChoice, StatusChoice, VersionStateChoice
 from apps.content.services.tafsir import TafsirService
 from apps.core.ninja_utils.errors import ItqanError, NinjaErrorResponse
 from apps.core.ninja_utils.ordering_base import ordering

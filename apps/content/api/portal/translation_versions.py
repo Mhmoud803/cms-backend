@@ -74,9 +74,7 @@ def list_translation_versions(request: Request, translation_slug: str):
             message=_("Translation with slug {slug} not found.").format(slug=translation_slug),
             status_code=404,
         ) from exc
-    return AssetVersion.objects.filter(asset=asset, state=VersionStateChoice.PUBLISHED).order_by(
-        "-created_at"
-    )
+    return AssetVersion.objects.filter(asset=asset, state=VersionStateChoice.PUBLISHED).order_by("-created_at")
 
 
 @router.post(

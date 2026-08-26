@@ -19,9 +19,7 @@ class AssetVersionNotifier:
             return
 
         is_first_version = (
-            not AssetVersion.objects.filter(
-                asset=asset_version.asset, state=VersionStateChoice.PUBLISHED
-            )
+            not AssetVersion.objects.filter(asset=asset_version.asset, state=VersionStateChoice.PUBLISHED)
             .exclude(pk=asset_version_id)
             .exists()
         )
