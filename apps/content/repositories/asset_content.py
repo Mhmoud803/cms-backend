@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import re
 
 from django.core.files.base import ContentFile
@@ -17,6 +18,8 @@ from django.db.models import QuerySet
 from apps.content.models import Asset, AssetVersion, AssetVersionEntry, VersionStateChoice
 from apps.content.services.asset_content_import import ParsedEntry
 from apps.quran.models import Ayah
+
+logger = logging.getLogger(__name__)
 
 
 class AssetContentRepository:
@@ -112,6 +115,9 @@ class AssetContentRepository:
     def replace_entries_from_parsed(self, version: AssetVersion, parsed: list[ParsedEntry]) -> int:
         """Replace a version's entries with parsed per-ayah rows. Returns count."""
         ayah_index = self._ayah_id_by_sura_aya()
+        logger.info(
+            f"replace_entries_from_parsed: deleting existing entries [version_id={version.pk}, ayah_index={ayah_index}]"
+        )
         version.entries.all().delete()
         rows: list[AssetVersionEntry] = []
         for parsed_entry in parsed:
@@ -127,6 +133,7 @@ class AssetContentRepository:
                     order=ayah_id,
                 )
             )
+        logger.info(f"replace_entries_from_parsed: creating new entries [version_id={version.pk}, rows={len(rows)}]")
         if rows:
             AssetVersionEntry.objects.bulk_create(rows, batch_size=1000)
         return len(rows)

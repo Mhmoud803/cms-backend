@@ -60,8 +60,8 @@ def import_uploaded_file_into_entries(version: AssetVersion) -> None:
     except AssetContentParseError as exc:
         logger.info(f"Uploaded file not parsed into entries [version_id={version.pk}, reason={exc}]")
         return
-    AssetContentRepository().replace_entries_from_parsed(version, parsed)
-    logger.info(f"Uploaded file imported into entries [version_id={version.pk}, entries={len(parsed)}]")
+    entries_count = AssetContentRepository().replace_entries_from_parsed(version, parsed)
+    logger.info(f"Uploaded file imported into entries [version_id={version.pk}, entries={entries_count}]")
 
 
 class AssetContentService:
