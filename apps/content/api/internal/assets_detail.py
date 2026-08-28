@@ -51,6 +51,10 @@ class DetailAssetOut(Schema):
 
 @router.get("assets/{id}/", response=DetailAssetOut, auth=None)
 def detail_assets(request: Request, id: int):
+    """
+    Retrieve details for a specific asset by its ID.
+    Preloads publisher, reciter, and previews to optimize schema serialization.
+    """
     logger.info(f"Asset detail requested [asset_id={id}]")
     asset = get_object_or_404(
         Asset.objects.select_related("publisher", "reciter").prefetch_related("previews"),
