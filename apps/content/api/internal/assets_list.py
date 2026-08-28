@@ -52,7 +52,8 @@ class AssetFilter(FilterSchema):
 def list_assets(request: Request, filters: AssetFilter = Query()):
     logger.info("Assets list requested")
     assets = (
-        Asset.objects.filter(request.publisher_q("publisher"))
+        Asset.objects.select_related("publisher", "reciter")
+        .filter(request.publisher_q("publisher"))
         .filter(restricted_for_tenant=False)
         .exclude(status=StatusChoice.DRAFT)
     )
