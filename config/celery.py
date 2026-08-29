@@ -45,6 +45,10 @@ app.conf.beat_schedule = {
         "task": "apps.content.tasks.notify_publishers_pending_access_requests",
         "schedule": crontab(minute=0, hour=settings.PENDING_ACCESS_REQUEST_NOTIFICATION_HOUR),
     },
+    "compute-similar-recommendations": {
+        "task": "apps.content.tasks.compute_similar_recommendations_task",
+        "schedule": crontab(minute=0, hour=2),
+    },
     "cleanup-abandoned-content-drafts": {
         "task": "apps.content.tasks.cleanup_abandoned_content_drafts_task",
         "schedule": crontab(minute=30, hour="*/6"),
